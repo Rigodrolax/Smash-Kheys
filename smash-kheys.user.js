@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Super Smash Kheys (prototype)
 // @namespace    smash-kheys
-// @version      0.92.3
+// @version      0.92.7
 // @description  Jeu de combat de plateforme avec les kheys du forum : versus, histoire, et mode en ligne (1v1, mêlée à 4, tournois, l'appart des kheys).
 // @match        https://www.jeuxvideo.com/forums/*
 // @require      https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js
@@ -9651,6 +9651,8 @@
   .sk-show-title{font-size:12px;letter-spacing:.35em;color:#ffd979;font-family:"SSK Rodin","Segoe UI",system-ui,sans-serif;text-shadow:0 2px 0 #000}
   .sk-opt,.sk-ctl{position:absolute;inset:0;align-items:center;justify-content:center;background:rgba(4,5,14,.55)}
   .sk-opt .sk-box{position:relative;max-height:92vh;overflow-y:auto}
+  @media (max-height:560px){.sk-opt .sk-box{padding:10px 18px 10px;max-height:96vh}.sk-opt .sk-box h2{font-size:19px;margin:0 0 4px}.sk-opt .sk-row2{padding:5px 12px;margin:3px 0;font-size:14px}}
+  .sk-tbtn{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:60;padding:12px 20px;border:3px solid #000;border-radius:14px;background:linear-gradient(180deg,#3ad16a,#1f8a44);color:#fff;font:italic 900 17px sans-serif;letter-spacing:.03em;box-shadow:0 0 0 2px #fff,0 6px 20px rgba(0,0,0,.6);cursor:pointer;display:none}
   .sk-box{position:relative;min-width:min(560px,88vw);max-width:94vw;max-height:84vh;overflow:auto;padding:26px 30px 22px;border:4px solid #000;border-radius:16px;background:linear-gradient(180deg,#232845,#11142a);box-shadow:inset 0 0 0 3px #9ca1ad,0 20px 60px rgba(0,0,0,.7)}
   .sk-box h2{margin:0 0 16px;font-size:28px;font-style:italic;color:#fff;letter-spacing:.06em;text-shadow:-2px -2px 0 #000,2px 2px 0 #000}
   .sk-row2{display:flex;align-items:center;justify-content:space-between;gap:30px;padding:12px 16px;margin:6px 0;border-radius:8px;background:rgba(255,255,255,.06);border:2px solid transparent;font-size:18px;font-style:italic;color:#fff;cursor:pointer}
@@ -18812,7 +18814,7 @@
   //  fond d'écran) sont faites à la demande, puis gardées dans le navigateur (IndexedDB) pour les
   //  lancements suivants. Le cache change avec la version du script.
   // =====================================================================
-  const SSK_VER = '0.92.3';
+  const SSK_VER = '0.92.7';
   const ICACHE = { mem: new Map(), db: null, queue: new Map(), timer: 0, ready: false };
   function idbOpen() {
     return new Promise((res) => {
@@ -19567,6 +19569,30 @@
           this.eco = { m: ECO_START, b: 0, it: {} };
           NET.ref(this.ecoPath()).set({ m: ECO_START, b: 0, it: {} }).catch(() => {});
         }).catch(fallback);
+      },
+      async payServer(amount) {
+        const e = this.eco;
+        if (!NET.uid) { try { localStorage.setItem('ssk-eco-v1', JSON.stringify(e)); } catch (er) {} return null; }
+        const r = NET.ref(this.ecoPath()), wait = (ms) => new Promise(res => setTimeout(res, ms));
+        let err = null;
+        for (let k = 0; k < 3; k++) {
+          try {
+            let s = await r.once('value');
+            if (!s.exists()) { await r.set({ m: ECO_START, b: 0, it: e.it || {} }); s = await r.once('value'); }
+            const v = s.val() || {}, now = NET.now();
+            const gap = v.ms != null ? 30500 - (now - +v.ms) : 0;
+            if (gap > 0) { await wait(gap + 400); continue; }
+            const age = v.md != null ? now - +v.md : Infinity;
+            if (Math.abs(age - 86400e3) < 4000) { await wait(4500); continue; }      // pile à la bascule des 24 h : on attend d'être du bon côté
+            const newWin = age >= 86400e3;
+            if (!newWin && (+v.mc || 0) >= 60) throw new Error('cap');
+            const body = { m: (+v.m || 0) + amount, b: v.b != null ? v.b : 0, w: v.w === true, car: v.car === true, moto: v.moto === true, ap: v.ap === true,
+              it: e.it || {}, n: e.n || 0, pr: e.pr || 0, rb: e.rb || 0, ms: NET.TS(), md: newWin ? NET.TS() : v.md, mc: newWin ? 1 : (+v.mc || 0) + 1 };
+            await r.set(body);
+            const s2 = await r.once('value'); return s2.val();
+          } catch (er) { err = er; if (er && er.message === 'cap') throw er; await wait(2000); }
+        }
+        throw err || new Error('refus');
       },
       ecoSave(claim, mis) {
         const e = this.eco; if (!e) return Promise.resolve();
@@ -21723,7 +21749,7 @@
         const old = { m: e.m, ms: e.ms, md: e.md, mc: e.mc };
         e.m += amount; e.ms = now; if (newWin) { e.md = now; e.mc = 1; } else e.mc = (e.mc || 0) + 1;
         SFX.cash(); this.floatText('+' + amount + ' R$', '#7dff6a');
-        this.ecoSave(false, { mission: true, newWin }).then(() => NET.uid && NET.ref(this.ecoPath()).once('value').then(s => { const v = s.val(); if (v) { e.ms = +v.ms || e.ms; e.md = +v.md || e.md; e.mc = +v.mc || e.mc; e.m = +v.m; } })).catch(() => { Object.assign(e, old); this.cityToast('Le serveur a refusé la paie (réessaie plus tard).'); });
+        this.payServer(amount).then((v) => { if (v) { e.m = +v.m || 0; e.b = +v.b || 0; e.ms = v.ms != null ? +v.ms : e.ms; e.md = v.md != null ? +v.md : e.md; e.mc = v.mc != null ? +v.mc : e.mc; } }).catch((er) => { Object.assign(e, old); console.warn('[SSK] paie refusée', er); this.cityToast(er && er.message === 'cap' ? 'Tu as assez bossé pour aujourd\'hui. Reviens demain !' : 'Le serveur a refusé la paie (réessaie plus tard).'); });
       },
       // ------------------------------------------------------------------ missions
       missionTarget() {
@@ -22400,6 +22426,11 @@
       } else { lastDir = ''; if (held.size && md !== 'hub' && md !== 'among') hold([]); }
     };
     const iv = setInterval(tick, 50);
+    // écran tactile sans contrôles : un gros bouton pour les activer (titre, menu, options)
+    const tb = document.createElement('div'); tb.className = 'sk-tbtn'; tb.textContent = '📱 ACTIVER LES CONTRÔLES TACTILES'; game.ov.appendChild(tb);
+    const coarse = () => { try { return matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints || 0) > 0; } catch (e) { return false; } };
+    tb.addEventListener('click', (e) => { e.stopPropagation(); try { localStorage.setItem('ssk-touch', '1'); } catch (er) {} touchApply(game); tb.style.display = 'none'; if (game.mode === 'options' && game.renderHome) game.renderHome(); });
+    const tbIv = setInterval(() => { if (!tb.isConnected) { clearInterval(tbIv); return; } tb.style.display = !TOUCH.on && coarse() && ['title', 'menu'].includes(game.mode) ? 'block' : 'none'; }, 300);
   }
 
   const PAUSE_CSS = `
@@ -25603,6 +25634,7 @@
   //  LANCEMENT SUR LE FORUM
   // =====================================================================
   let game = null;
+  try { window.__sskMode = () => game ? game.mode : null; } catch (e) {}
   const PASS = new Set(['F5', 'F11', 'F12']);
 
   function onKey(e, down) {
